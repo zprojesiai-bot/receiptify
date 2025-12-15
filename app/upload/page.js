@@ -322,8 +322,7 @@ export default function UploadPage() {
           confidence
         })
       }
-
-      setResults(processedResults)
+      
       setMessage(`✅ ${selectedFiles.length} fiş başarıyla işlendi!`)
       setProcessing(false)
       
