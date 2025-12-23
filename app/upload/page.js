@@ -12,12 +12,10 @@ export default function UploadPage() {
   const [clients, setClients] = useState([])
   const [selectedClient, setSelectedClient] = useState('')
   const [receiptType, setReceiptType] = useState('expense')
-  const [categoryMappings, setCategoryMappings] = useState({})
   const router = useRouter()
 
   useEffect(() => {
     loadClients()
-    loadCategoryMappings()
   }, [])
 
   const loadClients = async () => {
@@ -36,26 +34,6 @@ export default function UploadPage() {
     }
   }
 
-  const loadCategoryMappings = async () => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
-
-      const { data } = await supabase
-        .from('category_mappings')
-        .select('*')
-        .eq('user_id', user.id)
-
-      const mappings = {}
-      data?.forEach(m => {
-        mappings[m.company_name.toLowerCase()] = m.category
-      })
-      setCategoryMappings(mappings)
-    } catch (error) {
-      console.error('Error loading mappings:', error)
-    }
-  }
-
   const handleFileSelect = (e) => {
     const files = Array.from(e.target.files)
     setSelectedFiles(files)
@@ -64,79 +42,69 @@ export default function UploadPage() {
     setPreviews(previewUrls)
   }
 
-  const checkDuplicates = async (date, amount) => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return []
-
-      const { data } = await supabase
-        .from('receipts')
-        .select('*')
-        .eq('user_id', user.id)
-        .eq('date', date)
-        .gte('amount', amount - 5)
-        .lte('amount', amount + 5)
-
-      return data || []
-    } catch (error) {
-      console.error('Error checking duplicates:', error)
-      return []
-    }
-  }
-
-  const predictCategory = (companyName) => {
-    const name = companyName?.toLowerCase() || ''
-    
-    // Önce ezberlenen mappinglere bak
-    for (const [key, category] of Object.entries(categoryMappings)) {
-      if (name.includes(key)) return category
+  const extractReceiptData = (text) => {
+    // Regex patterns for Turkish receipts
+    const patterns = {
+      date: /(\d{2}[\.\/\-]\d{2}[\.\/\-]\d{4})|(\d{4}[\.\/\-]\d{2}[\.\/\-]\d{2})/,
+      amount: /(?:TOPLAM|TOTAL|TUTAR)[\s:]*\*?\s*([\d,\.]+)/i,
+      vatAmount: /(?:KDV|VAT|TOPKDV)[\s:]*\*?\s*([\d,\.]+)/i,
+      companyName: /^([A-ZÇĞİÖŞÜ\s&\.]{3,})/m
     }
 
-    // Akıllı tahmin
-    if (name.includes('migros') || name.includes('a101') || name.includes('bim') || 
-        name.includes('carrefour') || name.includes('market')) return 'Yemek'
-    if (name.includes('shell') || name.includes('opet') || name.includes('petrol')) return 'Ulaşım'
-    if (name.includes('eczane') || name.includes('pharmacy') || name.includes('hastane')) return 'Sağlık'
-    if (name.includes('kitap') || name.includes('kırtasiye') || name.includes('ofis')) return 'Kırtasiye'
-    
-    return 'Diğer'
-  }
-
-  const saveCategoryMapping = async (companyName, category) => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
-
-      await supabase
-        .from('category_mappings')
-        .upsert({
-          user_id: user.id,
-          company_name: companyName.toLowerCase(),
-          category: category
-        }, {
-          onConflict: 'user_id,company_name'
-        })
-
-      setCategoryMappings(prev => ({
-        ...prev,
-        [companyName.toLowerCase()]: category
-      }))
-    } catch (error) {
-      console.error('Error saving mapping:', error)
+    const result = {
+      date: '',
+      amount: '',
+      vatAmount: '',
+      companyName: '',
+      confidence: {
+        date: 0,
+        amount: 0,
+        vatAmount: 0,
+        companyName: 0
+      }
     }
+
+    // Extract date
+    const dateMatch = text.match(patterns.date)
+    if (dateMatch) {
+      let dateStr = dateMatch[0].replace(/\./g, '-').replace(/\//g, '-')
+      // Convert to YYYY-MM-DD format
+      const parts = dateStr.split('-')
+      if (parts.length === 3) {
+        if (parts[0].length === 4) {
+          result.date = dateStr // Already YYYY-MM-DD
+        } else {
+          result.date = `${parts[2]}-${parts[1]}-${parts[0]}` // DD-MM-YYYY to YYYY-MM-DD
+        }
+        result.confidence.date = 85
+      }
+    }
+
+    // Extract amount
+    const amountMatch = text.match(patterns.amount)
+    if (amountMatch) {
+      result.amount = amountMatch[1].replace(',', '.')
+      result.confidence.amount = 85
+    }
+
+    // Extract VAT amount
+    const vatMatch = text.match(patterns.vatAmount)
+    if (vatMatch) {
+      result.vatAmount = vatMatch[1].replace(',', '.')
+      result.confidence.vatAmount = 80
+    }
+
+    // Extract company name
+    const companyMatch = text.match(patterns.companyName)
+    if (companyMatch) {
+      result.companyName = companyMatch[1].trim()
+      result.confidence.companyName = 75
+    }
+
+    return result
   }
 
-  // Dosyayı Base64 string'e çeviren yardımcı fonksiyon
-const fileToBase64 = (file) => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.readAsDataURL(file);
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = error => reject(error);
-  });
-};
-
-const processReceipts = async () => {
+  const processReceipts = async () => {
     if (selectedFiles.length === 0) {
       alert('Lütfen en az bir fotoğraf seçin!')
       return
@@ -152,7 +120,7 @@ const processReceipts = async () => {
       setProgress({ current: i + 1, total: selectedFiles.length })
 
       try {
-        // 1. Supabase'e yükleme işlemi (Burası aynen kalıyor)
+        // 1. Supabase'e yükle
         const fileName = `${Date.now()}_${file.name}`
         const { data: uploadData, error: uploadError } = await supabase.storage
           .from('receipts')
@@ -164,68 +132,54 @@ const processReceipts = async () => {
           .from('receipts')
           .getPublicUrl(fileName)
 
-        // ==========================================
-        // DEĞİŞEN KISIM BAŞLIYOR
-        // ==========================================
+        // 2. Tesseract OCR
+        console.log(`Processing file ${i + 1}/${selectedFiles.length}...`)
+        const { data: { text } } = await Tesseract.recognize(file, 'tur', {
+          logger: m => {
+            if (m.status === 'recognizing text') {
+              console.log(`OCR Progress: ${Math.round(m.progress * 100)}%`)
+            }
+          }
+        })
 
-        // 2. OCR (Tesseract) kısmını sildik.
-        // Onun yerine dosyayı Base64'e çeviriyoruz:
-        const base64Image = await fileToBase64(file);
+        console.log('OCR Text:', text)
 
-        // 3. Claude API'ye resim verisi gönderiyoruz
-        // Not: route.js dosyan artık 'imageBase64' bekliyor.
-        const response = await fetch('/api/parse-receipt', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            imageBase64: base64Image 
+        // 3. Extract data from OCR text
+        const extracted = extractReceiptData(text)
+
+        // 4. Claude API ile iyileştir
+        let claudeData = null
+        try {
+          const response = await fetch('/api/parse-receipt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text, imageUrl: publicUrl })
           })
-        })
 
-        const apiResponse = await response.json()
-
-        if (!apiResponse.success) {
-          throw new Error(apiResponse.error || 'AI okuma hatası');
+          if (response.ok) {
+            claudeData = await response.json()
+            console.log('Claude Response:', claudeData)
+          }
+        } catch (apiError) {
+          console.error('Claude API error:', apiError)
+          // Fallback to regex extraction
         }
 
-        // Claude'dan gelen veriyi alıyoruz
-        const rawData = apiResponse.data;
-
-        // 4. Değişken İsimlerini Eşleştiriyoruz
-        // (API 'company_name' gönderiyor, ama senin kodun 'companyName' kullanıyor)
-        const parsed = {
-          date: rawData.date,
-          amount: rawData.amount,
-          companyName: rawData.company_name, // Düzeltme burada
-          vatRate: rawData.vat_rate,         // Düzeltme burada
-          vatAmount: rawData.vat_amount,     // Düzeltme burada
-          category: rawData.category
-        };
-
-        // 4. Otomatik kategori tahmini
-        const predictedCategory = predictCategory(parsed.companyName)
-
-        // 5. Duplicate check
-        const duplicates = await checkDuplicates(parsed.date, parsed.amount)
-
-        results.push({
+        // Merge Claude data with regex extraction (Claude takes priority)
+        const finalData = {
           imageUrl: publicUrl,
-          date: parsed.date,
-          amount: parsed.amount,
-          companyName: parsed.companyName,
-          vatAmount: parsed.vatAmount,
-          vatRate: parsed.vatRate,
-          category: predictedCategory,
-          rawText: "",
-          confidence: parsed.confidence,
-          hasDuplicates: duplicates.length > 0,
-          duplicateCount: duplicates.length
-        })
-
-        // Kategori mapping kaydet
-        if (parsed.companyName && predictedCategory) {
-          saveCategoryMapping(parsed.companyName, predictedCategory)
+          date: claudeData?.date || extracted.date,
+          amount: claudeData?.amount || extracted.amount,
+          companyName: claudeData?.companyName || extracted.companyName,
+          vatAmount: claudeData?.vatAmount || extracted.vatAmount,
+          vatRate: claudeData?.vatRate || (extracted.vatAmount && extracted.amount ? 
+            ((parseFloat(extracted.vatAmount) / (parseFloat(extracted.amount) - parseFloat(extracted.vatAmount))) * 100).toFixed(1) : ''),
+          category: claudeData?.category || 'Diğer',
+          rawText: text,
+          confidence: claudeData?.confidence || extracted.confidence
         }
+
+        results.push(finalData)
 
       } catch (error) {
         console.error(`Error processing file ${i + 1}:`, error)
@@ -235,11 +189,13 @@ const processReceipts = async () => {
           date: '',
           amount: '',
           companyName: '',
-          category: 'Diğer'
+          category: 'Diğer',
+          rawText: ''
         })
       }
     }
 
+    // Save to localStorage with client info
     localStorage.setItem('bulk_results', JSON.stringify(results.map(r => ({
       ...r,
       client_id: selectedClient,
@@ -382,30 +338,22 @@ const processReceipts = async () => {
                   style={{ width: `${(progress.current / progress.total) * 100}%` }}
                 />
               </div>
+              <p className="text-sm text-gray-600 text-center mt-2">
+                OCR ve AI analizi yapılıyor...
+              </p>
             </div>
           )}
         </div>
 
-        {/* Bilgi Kartları */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
-          <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-4">
-            <h4 className="font-bold text-blue-900 mb-2">🤖 Otomatik Kategorizasyon</h4>
-            <p className="text-sm text-blue-800">
-              Firma adına göre otomatik kategori belirlenir ve öğrenilir
-            </p>
-          </div>
-          <div className="bg-yellow-50 border-2 border-yellow-200 rounded-xl p-4">
-            <h4 className="font-bold text-yellow-900 mb-2">🔍 Duplicate Detection</h4>
-            <p className="text-sm text-yellow-800">
-              Aynı fiş daha önce yüklenmişse uyarı verilir
-            </p>
-          </div>
-          <div className="bg-green-50 border-2 border-green-200 rounded-xl p-4">
-            <h4 className="font-bold text-green-900 mb-2">📊 Gider/Gelir Takibi</h4>
-            <p className="text-sm text-green-800">
-              Her fişi gider veya gelir olarak işaretleyin
-            </p>
-          </div>
+        {/* Bilgi Kartı */}
+        <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-6 mt-6">
+          <h4 className="font-bold text-blue-900 mb-3">🤖 Nasıl Çalışır?</h4>
+          <ul className="space-y-2 text-sm text-blue-800">
+            <li>✅ <strong>Tesseract OCR:</strong> Fişten yazıları çıkarır</li>
+            <li>✅ <strong>Claude AI:</strong> Bilgileri düzenler ve kategorize eder</li>
+            <li>✅ <strong>Otomatik:</strong> Tarih, tutar, KDV otomatik bulunur</li>
+            <li>✅ <strong>Kontrol:</strong> Sonraki adımda tüm bilgileri kontrol edebilirsiniz</li>
+          </ul>
         </div>
       </main>
     </div>
