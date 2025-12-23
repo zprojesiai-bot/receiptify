@@ -118,32 +118,8 @@ export default function Dashboard() {
                 🧾
               </div>
               <div>
-                <p className="text-sm text-gray-600">Toplam Fiş</p>
+                <p className="text-sm text-gray-600">Toplam Kayıtlı Fiş</p>
                 <p className="text-2xl font-bold text-gray-900">{stats.totalReceipts}</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
-            <div className="flex items-center gap-4">
-              <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center text-2xl">
-                📉
-              </div>
-              <div>
-                <p className="text-sm text-gray-600">Toplam Gider</p>
-                <p className="text-2xl font-bold text-red-600">{stats.totalExpense.toFixed(2)} ₺</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
-            <div className="flex items-center gap-4">
-              <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center text-2xl">
-                📈
-              </div>
-              <div>
-                <p className="text-sm text-gray-600">Toplam Gelir</p>
-                <p className="text-2xl font-bold text-green-600">{stats.totalIncome.toFixed(2)} ₺</p>
               </div>
             </div>
           </div>
@@ -154,7 +130,7 @@ export default function Dashboard() {
                 👥
               </div>
               <div>
-                <p className="text-sm text-gray-600">Müşteriler</p>
+                <p className="text-sm text-gray-600">Müşterileriniz</p>
                 <p className="text-2xl font-bold text-gray-900">{stats.totalClients}</p>
               </div>
             </div>
