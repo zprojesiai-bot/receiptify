@@ -126,7 +126,17 @@ export default function UploadPage() {
     }
   }
 
-  const processReceipts = async () => {
+  // Dosyayı Base64 string'e çeviren yardımcı fonksiyon
+const fileToBase64 = (file) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = error => reject(error);
+  });
+};
+
+const processReceipts = async () => {
     if (selectedFiles.length === 0) {
       alert('Lütfen en az bir fotoğraf seçin!')
       return
@@ -142,7 +152,7 @@ export default function UploadPage() {
       setProgress({ current: i + 1, total: selectedFiles.length })
 
       try {
-        // 1. Supabase'e yükle
+        // 1. Supabase'e yükleme işlemi (Burası aynen kalıyor)
         const fileName = `${Date.now()}_${file.name}`
         const { data: uploadData, error: uploadError } = await supabase.storage
           .from('receipts')
@@ -154,19 +164,43 @@ export default function UploadPage() {
           .from('receipts')
           .getPublicUrl(fileName)
 
-        // 2. OCR
-        const { data: { text } } = await Tesseract.recognize(file, 'tur', {
-          logger: m => console.log(m)
-        })
+        // ==========================================
+        // DEĞİŞEN KISIM BAŞLIYOR
+        // ==========================================
 
-        // 3. Claude ile parse et
+        // 2. OCR (Tesseract) kısmını sildik.
+        // Onun yerine dosyayı Base64'e çeviriyoruz:
+        const base64Image = await fileToBase64(file);
+
+        // 3. Claude API'ye resim verisi gönderiyoruz
+        // Not: route.js dosyan artık 'imageBase64' bekliyor.
         const response = await fetch('/api/parse-receipt', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text, imageUrl: publicUrl })
+          body: JSON.stringify({ 
+            imageBase64: base64Image 
+          })
         })
 
-        const parsed = await response.json()
+        const apiResponse = await response.json()
+
+        if (!apiResponse.success) {
+          throw new Error(apiResponse.error || 'AI okuma hatası');
+        }
+
+        // Claude'dan gelen veriyi alıyoruz
+        const rawData = apiResponse.data;
+
+        // 4. Değişken İsimlerini Eşleştiriyoruz
+        // (API 'company_name' gönderiyor, ama senin kodun 'companyName' kullanıyor)
+        const parsed = {
+          date: rawData.date,
+          amount: rawData.amount,
+          companyName: rawData.company_name, // Düzeltme burada
+          vatRate: rawData.vat_rate,         // Düzeltme burada
+          vatAmount: rawData.vat_amount,     // Düzeltme burada
+          category: rawData.category
+        };
 
         // 4. Otomatik kategori tahmini
         const predictedCategory = predictCategory(parsed.companyName)
@@ -182,7 +216,7 @@ export default function UploadPage() {
           vatAmount: parsed.vatAmount,
           vatRate: parsed.vatRate,
           category: predictedCategory,
-          rawText: text,
+          rawText: "",
           confidence: parsed.confidence,
           hasDuplicates: duplicates.length > 0,
           duplicateCount: duplicates.length

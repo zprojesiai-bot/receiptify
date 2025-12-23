@@ -7,64 +7,64 @@ const anthropic = new Anthropic({
 
 export async function POST(request) {
   try {
-    const { ocrText } = await request.json();
+    // Frontend'den artık 'ocrText' değil, 'imageBase64' bekliyoruz
+    const { imageBase64 } = await request.json();
 
-    if (!ocrText) {
+    if (!imageBase64) {
       return NextResponse.json(
-        { error: 'OCR metni bulunamadı' },
+        { error: 'Görsel verisi bulunamadı' },
         { status: 400 }
       );
     }
 
-    // Claude API'ye prompt gönder
+    // Base64 başlığını temizle (data:image/jpeg;base64, kısmını at)
+    const base64Data = imageBase64.includes('base64,') 
+      ? imageBase64.split('base64,')[1] 
+      : imageBase64;
+
+    // Claude API'ye GÖRSEL gönderiyoruz (Vision Capabilities)
     const message = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-3-5-sonnet-20240620', // DOĞRU MODEL ID
       max_tokens: 1024,
       messages: [
         {
           role: 'user',
-          content: `Sen bir muhasebe asistanısın. Aşağıdaki fiş/fatura OCR metninden şu bilgileri Türk Muhasebe Standardına uygun şekilde çıkar ve JSON formatında döndür:
+          content: [
+            {
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: "image/jpeg", // Fiş formatına göre dinamik olabilir ama jpeg genelde çalışır
+                data: base64Data,
+              },
+            },
+            {
+              type: "text",
+              text: `Sen uzman bir muhasebe asistanısın. Eklediğim fiş/fatura görselini analiz et ve bilgileri JSON formatında çıkar.
 
-OCR Metni:
-${ocrText}
+              ÇIKARILACAK BİLGİLER:
+              1. date: Fatura tarihi (YYYY-MM-DD formatında)
+              2. company_name: Firma adı (tam ve düzgün yazılmış)
+              3. amount: Toplam tutar (sadece sayı)
+              4. vat_rate: KDV oranı (örn: 1, 10, 20 - en baskın oran)
+              5. vat_amount: KDV tutarı (sadece sayı)
+              6. category: Kategori (Yemek, Ulaşım, Kırtasiye, Sağlık, Eğitim, Diğer)
+              7. notes: Kısa açıklama (örn: "Market alışverişi")
 
-ÇIKARILACAK BİLGİLER:
-1. date: Fatura tarihi (YYYY-MM-DD formatında)
-2. company_name: Firma adı (tam ve düzgün yazılmış)
-3. amount: Toplam tutar (sadece sayı, para birimi olmadan)
-4. vat_rate: KDV oranı (örn: 1, 10, 20)
-5. vat_amount: KDV tutarı (sadece sayı)
-6. category: Kategori (şunlardan biri seç: Yemek, Ulaşım, Kırtasiye, Sağlık, Eğitim, Diğer)
-7. notes: Ek notlar (varsa önemli detaylar, kısa ve öz)
-
-ÖNEMLİ KURALLAR:
-- Eğer bir bilgi OCR metninde yoksa null döndür
-- Tutarları ondalık ayırıcı olarak nokta (.) kullan
-- Tarihi mutlaka YYYY-MM-DD formatında döndür
-- Kategoriyi yukarıdaki listeden seç
-- KDV oranını sayı olarak ver (ör: 20, 10, 1)
-- Firma adını düzgün Türkçe karakter kullanarak yaz
-
-SADECE JSON döndür, başka hiçbir açıklama yazma. Markdown kod bloğu kullanma.
-
-Örnek çıktı formatı:
-{
-  "date": "2024-12-08",
-  "company_name": "Migros",
-  "amount": 150.75,
-  "vat_rate": 20,
-  "vat_amount": 25.13,
-  "category": "Yemek",
-  "notes": "Market alışverişi"
-}`
+              KURALLAR:
+              - Sadece saf JSON döndür. Markdown bloğu kullanma.
+              - Bulamadığın değere null yaz.
+              - Virgüllü sayıları noktaya çevir (150,50 -> 150.50).
+              `
+            }
+          ]
         }
       ]
     });
 
-    // Claude'un yanıtını parse et
     const responseText = message.content[0].text;
     
-    // JSON'u çıkar (eğer Claude markdown kod bloğu eklediyse temizle)
+    // JSON temizleme ve parse işlemi
     let jsonText = responseText.trim();
     if (jsonText.startsWith('```json')) {
       jsonText = jsonText.replace(/```json\n?/g, '').replace(/```\n?/g, '');
