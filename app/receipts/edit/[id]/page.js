@@ -7,7 +7,7 @@ export default function EditReceiptPage() {
   const router = useRouter()
   const params = useParams()
   const receiptId = params.id
-  
+
   const [formData, setFormData] = useState({
     date: '',
     amount: '',
@@ -28,27 +28,41 @@ export default function EditReceiptPage() {
 
   const loadReceipt = async () => {
     try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) {
+        router.push('/')
+        return
+      }
+
       const { data, error } = await supabase
         .from('receipts')
         .select('*')
         .eq('id', receiptId)
+        .eq('user_id', user.id)
         .single()
 
       if (error) throw error
 
-      setImageUrl(data.image_url)
+      if (!data) {
+        alert('Fiş bulunamadı!')
+        router.push('/receipts')
+        return
+      }
+
       setFormData({
         date: data.date || '',
-        amount: data.amount || '',
+        amount: data.amount?.toString() || '',
         company_name: data.company_name || '',
-        vat_rate: data.vat_rate || '',
-        vat_amount: data.vat_amount || '',
+        vat_rate: data.vat_rate?.toString() || '',
+        vat_amount: data.vat_amount?.toString() || '',
         category: data.category || '',
         notes: data.notes || '',
       })
+      setImageUrl(data.image_url || '')
     } catch (error) {
-      console.error('Error loading receipt:', error)
-      setMessage('Fiş yüklenemedi!')
+      console.error('Load error:', error)
+      alert('Fiş yüklenirken hata: ' + error.message)
+      router.push('/receipts')
     } finally {
       setLoading(false)
     }
@@ -79,11 +93,26 @@ export default function EditReceiptPage() {
       setTimeout(() => {
         router.push('/receipts')
       }, 1500)
-
     } catch (error) {
+      console.error('Update error:', error)
       setMessage('Hata: ' + error.message)
     } finally {
       setSaving(false)
+    }
+  }
+
+  const calculateVATRate = () => {
+    if (formData.amount && formData.vat_amount) {
+      const total = parseFloat(formData.amount)
+      const vat = parseFloat(formData.vat_amount)
+      if (total > vat && vat > 0) {
+        const rate = ((vat / (total - vat)) * 100).toFixed(1)
+        setFormData({...formData, vat_rate: rate})
+      } else {
+        alert('Geçersiz tutar değerleri!')
+      }
+    } else {
+      alert('Lütfen önce Toplam Tutar ve KDV Tutarını girin!')
     }
   }
 
@@ -96,13 +125,15 @@ export default function EditReceiptPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white shadow">
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50">
+      <header className="bg-white shadow-sm border-b">
         <div className="max-w-7xl mx-auto px-4 py-4 flex justify-between items-center">
-          <h1 className="text-2xl font-bold text-gray-800">✏️ Fiş Düzenle</h1>
+          <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+            ✏️ Fiş Düzenle
+          </h1>
           <button
             onClick={() => router.push('/receipts')}
-            className="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600"
+            className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition"
           >
             ← İptal
           </button>
@@ -111,22 +142,28 @@ export default function EditReceiptPage() {
 
       <main className="max-w-4xl mx-auto px-4 py-8">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div>
+          {/* Fotoğraf */}
+          <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
             <h2 className="text-lg font-semibold mb-3 text-gray-800">Fiş Fotoğrafı</h2>
-            {imageUrl && (
+            {imageUrl ? (
               <img
                 src={imageUrl}
                 alt="Receipt"
                 className="w-full rounded-lg border shadow"
               />
+            ) : (
+              <div className="w-full h-64 bg-gray-100 rounded-lg flex items-center justify-center">
+                <span className="text-gray-400">Fotoğraf yok</span>
+              </div>
             )}
           </div>
 
-          <div>
-            <h2 className="text-lg font-semibold mb-3 text-gray-800">
-              Bilgileri Düzenleyin
+          {/* Form */}
+          <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
+            <h2 className="text-lg font-semibold mb-4 text-gray-800">
+              Bilgileri Düzenle
             </h2>
-            
+
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -167,22 +204,6 @@ export default function EditReceiptPage() {
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  KDV Oranı (%)
-                </label>
-                <select
-                  value={formData.vat_rate}
-                  onChange={(e) => setFormData({...formData, vat_rate: e.target.value})}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-gray-900"
-                >
-                  <option value="">Seçiniz</option>
-                  <option value="1">%1</option>
-                  <option value="10">%10</option>
-                  <option value="20">%20</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
                   KDV Tutarı (TL)
                 </label>
                 <input
@@ -196,15 +217,51 @@ export default function EditReceiptPage() {
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
+                  KDV Oranı (%)
+                </label>
+                <div className="flex gap-2">
+                  <select
+                    value={formData.vat_rate}
+                    onChange={(e) => {
+                      if (e.target.value === 'HESAPLA') {
+                        calculateVATRate()
+                      } else {
+                        setFormData({...formData, vat_rate: e.target.value})
+                      }
+                    }}
+                    className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-gray-900"
+                  >
+                    <option value="">Seçiniz</option>
+                    <option value="1">%1</option>
+                    <option value="10">%10</option>
+                    <option value="20">%20</option>
+                    <option value="HESAPLA">🧮 KDV Hesapla</option>
+                  </select>
+                  {formData.vat_rate && !['1', '10', '20', ''].includes(formData.vat_rate) && (
+                    <div className="px-3 py-2 bg-green-50 border border-green-300 rounded-lg text-green-700 font-semibold">
+                      %{parseFloat(formData.vat_rate).toFixed(1)}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
                   Kategori
                 </label>
-                <input
-                  type="text"
+                <select
                   value={formData.category}
                   onChange={(e) => setFormData({...formData, category: e.target.value})}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-gray-900"
-                  placeholder="Yemek, Ulaşım, vb."
-                />
+                >
+                  <option value="">Seçiniz</option>
+                  <option value="Yemek">Yemek</option>
+                  <option value="Ulaşım">Ulaşım</option>
+                  <option value="Kırtasiye">Kırtasiye</option>
+                  <option value="Sağlık">Sağlık</option>
+                  <option value="Eğitim">Eğitim</option>
+                  <option value="Diğer">Diğer</option>
+                </select>
               </div>
 
               <div>
@@ -222,16 +279,16 @@ export default function EditReceiptPage() {
               <button
                 type="submit"
                 disabled={saving}
-                className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 transition disabled:opacity-50"
+                className="w-full bg-gradient-to-r from-blue-600 to-purple-600 text-white py-3 rounded-lg font-semibold hover:from-blue-700 hover:to-purple-700 transition disabled:opacity-50 shadow-lg"
               >
-                {saving ? 'Kaydediliyor...' : 'Değişiklikleri Kaydet'}
+                {saving ? 'Kaydediliyor...' : '✓ Değişiklikleri Kaydet'}
               </button>
 
               {message && (
-                <div className={`p-3 rounded-lg text-sm ${
+                <div className={`p-3 rounded-lg text-sm font-medium ${
                   message.includes('Hata')
-                    ? 'bg-red-50 text-red-700'
-                    : 'bg-green-50 text-green-700'
+                    ? 'bg-red-50 text-red-700 border border-red-200'
+                    : 'bg-green-50 text-green-700 border border-green-200'
                 }`}>
                   {message}
                 </div>

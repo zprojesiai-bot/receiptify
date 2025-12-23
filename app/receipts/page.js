@@ -354,7 +354,13 @@ export default function ReceiptsPage() {
                           onClick={() => handleDelete(receipt.id)}
                           className="px-3 py-1 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 font-medium transition"
                         >
-                          🗑️ Sil
+                           ✏️ Düzenle
+</button>
+<button
+  onClick={() => handleDelete(receipt.id)}
+  className="px-3 py-1 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 font-medium transition"
+  >                        
+  🗑️ Sil
                         </button>
                       </div>
                     </td>

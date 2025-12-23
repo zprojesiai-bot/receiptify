@@ -4,125 +4,79 @@ import { supabase } from '../../lib/supabase'
 import { useRouter } from 'next/navigation'
 
 export default function Dashboard() {
-  const [user, setUser] = useState(null)
-  const [loading, setLoading] = useState(true)
   const [stats, setStats] = useState({
     totalReceipts: 0,
     totalAmount: 0,
-    totalVAT: 0,
+    totalIncome: 0,
+    totalExpense: 0,
+    totalClients: 0,
+    activeBudgets: 0,
+    budgetAlerts: 0
   })
-  const [monthlyData, setMonthlyData] = useState([])
-  const [categoryData, setCategoryData] = useState([])
+  const [loading, setLoading] = useState(true)
   const router = useRouter()
 
   useEffect(() => {
-    checkUser()
+    loadStats()
   }, [])
 
-  const checkUser = async () => {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) {
-      router.push('/')
-    } else {
-      setUser(user)
-      await loadStats(user.id)
-      await loadMonthlyData(user.id)
-      await loadCategoryData(user.id)
-    }
-    setLoading(false)
-  }
-
-  const loadStats = async (userId) => {
+  const loadStats = async () => {
     try {
-      const { data, error } = await supabase
-        .from('receipts')
-        .select('amount, vat_amount')
-        .eq('user_id', userId)
-
-      if (error) throw error
-
-      const totalReceipts = data.length
-      const totalAmount = data.reduce((sum, r) => sum + (r.amount || 0), 0)
-      const totalVAT = data.reduce((sum, r) => sum + (r.vat_amount || 0), 0)
-
-      setStats({ totalReceipts, totalAmount, totalVAT })
-    } catch (error) {
-      console.error('Error loading stats:', error)
-    }
-  }
-
-  const loadMonthlyData = async (userId) => {
-    try {
-      const { data, error } = await supabase
-        .from('receipts')
-        .select('date, amount, vat_amount')
-        .eq('user_id', userId)
-        .order('date', { ascending: false })
-
-      if (error) throw error
-
-      // Aylık gruplama
-      const grouped = {}
-      data.forEach(r => {
-        if (r.date) {
-          const month = r.date.substring(0, 7) // YYYY-MM
-          if (!grouped[month]) {
-            grouped[month] = { count: 0, total: 0, vat: 0 }
-          }
-          grouped[month].count++
-          grouped[month].total += r.amount || 0
-          grouped[month].vat += r.vat_amount || 0
-        }
-      })
-
-      const monthNames = {
-        '01': 'Ocak', '02': 'Şubat', '03': 'Mart', '04': 'Nisan',
-        '05': 'Mayıs', '06': 'Haziran', '07': 'Temmuz', '08': 'Ağustos',
-        '09': 'Eylül', '10': 'Ekim', '11': 'Kasım', '12': 'Aralık'
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) {
+        router.push('/')
+        return
       }
 
-      const monthly = Object.keys(grouped)
-        .sort()
-        .reverse()
-        .slice(0, 6)
-        .map(month => ({
-          month: `${monthNames[month.split('-')[1]]} ${month.split('-')[0]}`,
-          ...grouped[month]
-        }))
+      const [receiptsRes, clientsRes, budgetsRes] = await Promise.all([
+        supabase.from('receipts').select('*').eq('user_id', user.id),
+        supabase.from('clients').select('id').eq('user_id', user.id),
+        supabase.from('budgets').select('*').eq('user_id', user.id)
+      ])
 
-      setMonthlyData(monthly)
-    } catch (error) {
-      console.error('Error loading monthly data:', error)
-    }
-  }
+      const receipts = receiptsRes.data || []
+      const clients = clientsRes.data || []
+      const budgets = budgetsRes.data || []
 
-  const loadCategoryData = async (userId) => {
-    try {
-      const { data, error } = await supabase
-        .from('receipts')
-        .select('category, amount')
-        .eq('user_id', userId)
+      const totalExpense = receipts
+        .filter(r => r.type === 'expense' || !r.type)
+        .reduce((sum, r) => sum + (r.amount || 0), 0)
 
-      if (error) throw error
+      const totalIncome = receipts
+        .filter(r => r.type === 'income')
+        .reduce((sum, r) => sum + (r.amount || 0), 0)
 
-      const grouped = {}
-      data.forEach(r => {
-        const cat = r.category || 'Diğer'
-        if (!grouped[cat]) {
-          grouped[cat] = { count: 0, total: 0 }
+      // Budget alerts
+      const currentMonth = new Date().toISOString().substring(0, 7)
+      const monthlySpending = {}
+      receipts.forEach(r => {
+        if (r.date?.startsWith(currentMonth) && r.type !== 'income') {
+          const key = `${r.client_id || 'all'}-${r.category || 'Diğer'}`
+          monthlySpending[key] = (monthlySpending[key] || 0) + (r.amount || 0)
         }
-        grouped[cat].count++
-        grouped[cat].total += r.amount || 0
       })
 
-      const categories = Object.keys(grouped).map(cat => ({
-        category: cat,
-        ...grouped[cat]
-      })).sort((a, b) => b.total - a.total)
+      let alertCount = 0
+      budgets.forEach(budget => {
+        const key = `${budget.client_id || 'all'}-${budget.category}`
+        const spent = monthlySpending[key] || 0
+        const percentage = (spent / budget.monthly_limit) * 100
+        if (percentage >= budget.alert_threshold) alertCount++
+      })
 
-      setCategoryData(categories)
+      setStats({
+        totalReceipts: receipts.length,
+        totalAmount: totalExpense + totalIncome,
+        totalIncome,
+        totalExpense,
+        totalClients: clients.length,
+        activeBudgets: budgets.length,
+        budgetAlerts: alertCount
+      })
     } catch (error) {
-      console.error('Error loading category data:', error)
+      console.error('Error loading stats:', error)
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -139,167 +93,195 @@ export default function Dashboard() {
     )
   }
 
-  if (!user) return null
-
-  const categoryIcons = {
-    'Yemek': '🍽️',
-    'Ulaşım': '🚗',
-    'Kırtasiye': '📎',
-    'Sağlık': '⚕️',
-    'Eğitim': '📚',
-    'Diğer': '📦'
-  }
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50">
       <header className="bg-white shadow-sm border-b">
-        <div className="max-w-7xl mx-auto px-4 py-4 flex justify-between items-center">
+        <div className="max-w-7xl mx-auto px-4 py-4 flex flex-wrap justify-between items-center gap-3">
           <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-            🧾 Dashboard
+            🏠 Dashboard
           </h1>
-          <div className="flex gap-3">
-            <button
-              onClick={() => router.push('/receipts')}
-              className="px-4 py-2 bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-lg hover:from-green-600 hover:to-emerald-600 transition font-medium shadow-sm"
-            >
-              🧾 Fişlerim
-            </button>
-            <button
-              onClick={() => router.push('/upload')}
-              className="px-4 py-2 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 transition font-medium shadow-sm"
-            >
-              📸 Fiş Yükle
-            </button>
-            <button
-              onClick={handleLogout}
-              className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition font-medium"
-            >
-              Çıkış
-            </button>
-          </div>
+          <button
+            onClick={handleLogout}
+            className="px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 font-medium"
+          >
+            🚪 Çıkış
+          </button>
         </div>
       </header>
 
       <main className="max-w-7xl mx-auto px-4 py-8">
-        {/* Kullanıcı Bilgisi */}
-        <div className="bg-white rounded-2xl shadow-lg p-6 mb-6 border border-gray-100">
-          <h2 className="text-xl font-bold mb-2 text-gray-800">
-            Hoş geldiniz! 👋
-          </h2>
-          <p className="text-gray-600">{user.email}</p>
-        </div>
-        
-        {/* Genel İstatistikler */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          <div className="bg-gradient-to-br from-blue-500 to-blue-600 p-6 rounded-2xl shadow-lg text-white transform hover:scale-105 transition">
-            <div className="text-5xl font-bold mb-2">
-              {stats.totalReceipts}
-            </div>
-            <div className="text-blue-100 font-medium">Toplam Fiş</div>
-          </div>
-          <div className="bg-gradient-to-br from-green-500 to-green-600 p-6 rounded-2xl shadow-lg text-white transform hover:scale-105 transition">
-            <div className="text-5xl font-bold mb-2">
-              {stats.totalAmount.toFixed(2)} ₺
-            </div>
-            <div className="text-green-100 font-medium">Toplam Harcama</div>
-          </div>
-          <div className="bg-gradient-to-br from-purple-500 to-purple-600 p-6 rounded-2xl shadow-lg text-white transform hover:scale-105 transition">
-            <div className="text-5xl font-bold mb-2">
-              {stats.totalVAT.toFixed(2)} ₺
-            </div>
-            <div className="text-purple-100 font-medium">KDV Toplamı</div>
-          </div>
-        </div>
-
-        {/* Aylık Analiz */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-          {/* Aylık Tablo */}
+        {/* Hızlı İstatistikler */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
           <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
-            <h3 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
-              📅 Aylık Analiz
-            </h3>
-            {monthlyData.length === 0 ? (
-              <p className="text-gray-500 text-center py-8">Henüz veri yok</p>
-            ) : (
-              <div className="space-y-3">
-                {monthlyData.map((m, idx) => (
-                  <div key={idx} className="p-4 bg-gradient-to-r from-blue-50 to-purple-50 rounded-xl border border-blue-100">
-                    <div className="flex justify-between items-center mb-2">
-                      <span className="font-bold text-gray-800">{m.month}</span>
-                      <span className="text-2xl font-bold text-blue-600">{m.total.toFixed(2)} ₺</span>
-                    </div>
-                    <div className="flex justify-between text-sm text-gray-600">
-                      <span>{m.count} fiş</span>
-                      <span>KDV: {m.vat.toFixed(2)} ₺</span>
-                    </div>
-                  </div>
-                ))}
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center text-2xl">
+                🧾
               </div>
-            )}
+              <div>
+                <p className="text-sm text-gray-600">Toplam Fiş</p>
+                <p className="text-2xl font-bold text-gray-900">{stats.totalReceipts}</p>
+              </div>
+            </div>
           </div>
 
-          {/* Kategori Analizi */}
           <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
-            <h3 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
-              📊 Kategori Analizi
-            </h3>
-            {categoryData.length === 0 ? (
-              <p className="text-gray-500 text-center py-8">Henüz veri yok</p>
-            ) : (
-              <div className="space-y-3">
-                {categoryData.map((c, idx) => (
-                  <div key={idx} className="p-4 bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl border border-green-100">
-                    <div className="flex items-center gap-3 mb-2">
-                      <span className="text-3xl">{categoryIcons[c.category] || '📦'}</span>
-                      <div className="flex-1">
-                        <div className="flex justify-between items-center">
-                          <span className="font-bold text-gray-800">{c.category}</span>
-                          <span className="text-xl font-bold text-green-600">{c.total.toFixed(2)} ₺</span>
-                        </div>
-                        <div className="text-sm text-gray-600">{c.count} fiş</div>
-                      </div>
-                    </div>
-                    <div className="w-full bg-gray-200 rounded-full h-2 mt-2">
-                      <div
-                        className="bg-gradient-to-r from-green-500 to-emerald-500 h-2 rounded-full"
-                        style={{ width: `${(c.total / stats.totalAmount) * 100}%` }}
-                      />
-                    </div>
-                  </div>
-                ))}
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center text-2xl">
+                📉
               </div>
-            )}
+              <div>
+                <p className="text-sm text-gray-600">Toplam Gider</p>
+                <p className="text-2xl font-bold text-red-600">{stats.totalExpense.toFixed(2)} ₺</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center text-2xl">
+                📈
+              </div>
+              <div>
+                <p className="text-sm text-gray-600">Toplam Gelir</p>
+                <p className="text-2xl font-bold text-green-600">{stats.totalIncome.toFixed(2)} ₺</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 bg-purple-100 rounded-full flex items-center justify-center text-2xl">
+                👥
+              </div>
+              <div>
+                <p className="text-sm text-gray-600">Müşteriler</p>
+                <p className="text-2xl font-bold text-gray-900">{stats.totalClients}</p>
+              </div>
+            </div>
           </div>
         </div>
 
-        {/* Hızlı Erişim */}
-        <div className="bg-gradient-to-r from-blue-600 to-purple-600 rounded-2xl shadow-xl p-8 text-white">
-          <h3 className="text-2xl font-bold mb-4">🚀 Hızlı İşlemler</h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <button
-              onClick={() => router.push('/upload')}
-              className="bg-white bg-opacity-20 hover:bg-opacity-30 backdrop-blur-sm p-6 rounded-xl transition transform hover:scale-105"
-            >
-              <div className="text-4xl mb-2">📸</div>
-              <div className="font-bold">Yeni Fiş Ekle</div>
-              <div className="text-sm text-blue-100 mt-1">Toplu yükleme destekli</div>
-            </button>
-            <button
-              onClick={() => router.push('/receipts')}
-              className="bg-white bg-opacity-20 hover:bg-opacity-30 backdrop-blur-sm p-6 rounded-xl transition transform hover:scale-105"
-            >
-              <div className="text-4xl mb-2">📋</div>
-              <div className="font-bold">Fişleri Görüntüle</div>
-              <div className="text-sm text-blue-100 mt-1">Filtreleme ve arama</div>
-            </button>
-            <button
-              onClick={() => alert('Rapor özelliği yakında!')}
-              className="bg-white bg-opacity-20 hover:bg-opacity-30 backdrop-blur-sm p-6 rounded-xl transition transform hover:scale-105"
-            >
-              <div className="text-4xl mb-2">📊</div>
-              <div className="font-bold">Rapor Al</div>
-              <div className="text-sm text-blue-100 mt-1">Excel/PDF export</div>
-            </button>
+        {/* Budget Alerts */}
+        {stats.budgetAlerts > 0 && (
+          <div className="bg-yellow-50 border-2 border-yellow-400 rounded-2xl p-6 mb-8">
+            <div className="flex items-start gap-3">
+              <div className="text-3xl">⚠️</div>
+              <div>
+                <h3 className="font-bold text-yellow-900 mb-1">Bütçe Uyarısı!</h3>
+                <p className="text-sm text-yellow-800">
+                  {stats.budgetAlerts} bütçe kategorisi eşik değerine ulaştı veya aştı.
+                </p>
+                <button
+                  onClick={() => router.push('/budgets')}
+                  className="mt-3 px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 font-medium text-sm"
+                >
+                  Bütçeleri İncele →
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Ana Menü */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <button
+            onClick={() => router.push('/upload')}
+            className="bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-2xl shadow-lg p-8 hover:shadow-xl transition text-left"
+          >
+            <div className="text-5xl mb-4">📤</div>
+            <h3 className="text-2xl font-bold mb-2">Fiş Yükle</h3>
+            <p className="text-blue-100">
+              Fotoğraf çekerek veya yükleyerek fiş ekleyin
+            </p>
+          </button>
+
+          <button
+            onClick={() => router.push('/receipts')}
+            className="bg-white rounded-2xl shadow-lg p-8 hover:shadow-xl transition text-left border border-gray-100"
+          >
+            <div className="text-5xl mb-4">🧾</div>
+            <h3 className="text-2xl font-bold text-gray-900 mb-2">Fişlerim</h3>
+            <p className="text-gray-600">
+              Tüm fişlerinizi görüntüleyin ve yönetin
+            </p>
+          </button>
+
+          <button
+            onClick={() => router.push('/clients')}
+            className="bg-white rounded-2xl shadow-lg p-8 hover:shadow-xl transition text-left border border-gray-100"
+          >
+            <div className="text-5xl mb-4">👥</div>
+            <h3 className="text-2xl font-bold text-gray-900 mb-2">Müşteriler</h3>
+            <p className="text-gray-600">
+              Müşteri listesini yönetin
+            </p>
+            {stats.totalClients > 0 && (
+              <span className="inline-block mt-2 px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm font-medium">
+                {stats.totalClients} müşteri
+              </span>
+            )}
+          </button>
+
+          <button
+            onClick={() => router.push('/budgets')}
+            className="bg-white rounded-2xl shadow-lg p-8 hover:shadow-xl transition text-left border border-gray-100"
+          >
+            <div className="text-5xl mb-4">💰</div>
+            <h3 className="text-2xl font-bold text-gray-900 mb-2">Bütçe Yönetimi</h3>
+            <p className="text-gray-600">
+              Kategori bazlı bütçe limitleri belirleyin
+            </p>
+            {stats.budgetAlerts > 0 && (
+              <span className="inline-block mt-2 px-3 py-1 bg-yellow-100 text-yellow-700 rounded-full text-sm font-medium">
+                ⚠️ {stats.budgetAlerts} uyarı
+              </span>
+            )}
+          </button>
+
+          <button
+            onClick={() => router.push('/analytics')}
+            className="bg-white rounded-2xl shadow-lg p-8 hover:shadow-xl transition text-left border border-gray-100"
+          >
+            <div className="text-5xl mb-4">📊</div>
+            <h3 className="text-2xl font-bold text-gray-900 mb-2">Analiz & Raporlar</h3>
+            <p className="text-gray-600">
+              Detaylı harcama analizleri ve karşılaştırmalar
+            </p>
+          </button>
+
+          <button
+            onClick={() => alert('Yakında!')}
+            className="bg-gray-50 rounded-2xl shadow-lg p-8 hover:shadow-xl transition text-left border-2 border-dashed border-gray-300"
+          >
+            <div className="text-5xl mb-4">📄</div>
+            <h3 className="text-2xl font-bold text-gray-900 mb-2">PDF Yükle</h3>
+            <p className="text-gray-600">
+              Toplu PDF fatura yükleme (Yakında)
+            </p>
+          </button>
+        </div>
+
+        {/* Net Durum Kartı */}
+        <div className="mt-8 bg-gradient-to-r from-green-600 to-emerald-600 rounded-2xl shadow-lg p-8 text-white">
+          <h3 className="text-xl font-bold mb-4">💵 Net Durum</h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div>
+              <p className="text-sm opacity-90 mb-1">Toplam Gelir</p>
+              <p className="text-3xl font-bold">+{stats.totalIncome.toFixed(2)} ₺</p>
+            </div>
+            <div>
+              <p className="text-sm opacity-90 mb-1">Toplam Gider</p>
+              <p className="text-3xl font-bold">-{stats.totalExpense.toFixed(2)} ₺</p>
+            </div>
+            <div>
+              <p className="text-sm opacity-90 mb-1">Net</p>
+              <p className={`text-4xl font-bold ${
+                stats.totalIncome - stats.totalExpense >= 0 ? 'text-white' : 'text-red-200'
+              }`}>
+                {stats.totalIncome - stats.totalExpense >= 0 ? '+' : ''}
+                {(stats.totalIncome - stats.totalExpense).toFixed(2)} ₺
+              </p>
+            </div>
           </div>
         </div>
       </main>
