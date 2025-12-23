@@ -196,6 +196,17 @@ export default function Dashboard() {
           </button>
 
           <button
+            onClick={() => router.push('/receipts')}
+            className="bg-white rounded-2xl shadow-lg p-8 hover:shadow-xl transition text-left border border-gray-100"
+          >
+            <div className="text-5xl mb-4">🧾</div>
+            <h3 className="text-2xl font-bold text-gray-900 mb-2">Müşteri Fişleri</h3>
+            <p className="text-gray-600">
+              Müşterilerinizin fişlerini görüntüleyin ve yönetin
+            </p>
+          </button>
+
+          <button
             onClick={() => router.push('/clients')}
             className="bg-white rounded-2xl shadow-lg p-8 hover:shadow-xl transition text-left border border-gray-100"
           >
