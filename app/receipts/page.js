@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 
 export default function ReceiptsPage() {
   const [receipts, setReceipts] = useState([])
+  const [clients, setClients] = useState([])
   const [filteredReceipts, setFilteredReceipts] = useState([])
   const [loading, setLoading] = useState(true)
   const [viewingImage, setViewingImage] = useState(null)
@@ -14,20 +15,21 @@ export default function ReceiptsPage() {
     category: '',
     minAmount: '',
     maxAmount: '',
-    search: ''
+    search: '',
+    clientId: ''
   })
   const [anomalies, setAnomalies] = useState([])
   const router = useRouter()
 
   useEffect(() => {
-    loadReceipts()
+    loadData()
   }, [])
 
   useEffect(() => {
     applyFilters()
   }, [receipts, filters])
 
-  const loadReceipts = async () => {
+  const loadData = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) {
@@ -35,18 +37,26 @@ export default function ReceiptsPage() {
         return
       }
 
-      const { data, error } = await supabase
-        .from('receipts')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false })
+      const [receiptsRes, clientsRes] = await Promise.all([
+        supabase
+          .from('receipts')
+          .select('*, clients(name)')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('clients')
+          .select('*')
+          .eq('user_id', user.id)
+      ])
 
-      if (error) throw error
+      if (receiptsRes.error) throw receiptsRes.error
+      if (clientsRes.error) throw clientsRes.error
 
-      setReceipts(data || [])
-      detectAnomalies(data || [])
+      setReceipts(receiptsRes.data || [])
+      setClients(clientsRes.data || [])
+      detectAnomalies(receiptsRes.data || [])
     } catch (error) {
-      console.error('Error loading receipts:', error)
+      console.error('Error loading data:', error)
     } finally {
       setLoading(false)
     }
@@ -61,7 +71,7 @@ export default function ReceiptsPage() {
 
     const detected = data.filter(r => {
       const amount = r.amount || 0
-      return amount > avg + (2 * stdDev) // 2 standart sapma üstü
+      return amount > avg + (2 * stdDev)
     }).map(r => r.id)
 
     setAnomalies(detected)
@@ -70,33 +80,30 @@ export default function ReceiptsPage() {
   const applyFilters = () => {
     let filtered = [...receipts]
 
-    // Tarih filtresi
     if (filters.startDate) {
       filtered = filtered.filter(r => r.date >= filters.startDate)
     }
     if (filters.endDate) {
       filtered = filtered.filter(r => r.date <= filters.endDate)
     }
-
-    // Kategori filtresi
     if (filters.category) {
       filtered = filtered.filter(r => r.category === filters.category)
     }
-
-    // Tutar filtresi
+    if (filters.clientId) {
+      filtered = filtered.filter(r => r.client_id === filters.clientId)
+    }
     if (filters.minAmount) {
       filtered = filtered.filter(r => (r.amount || 0) >= parseFloat(filters.minAmount))
     }
     if (filters.maxAmount) {
       filtered = filtered.filter(r => (r.amount || 0) <= parseFloat(filters.maxAmount))
     }
-
-    // Arama
     if (filters.search) {
       const search = filters.search.toLowerCase()
       filtered = filtered.filter(r => 
         (r.company_name || '').toLowerCase().includes(search) ||
-        (r.notes || '').toLowerCase().includes(search)
+        (r.notes || '').toLowerCase().includes(search) ||
+        (r.clients?.name || '').toLowerCase().includes(search)
       )
     }
 
@@ -127,7 +134,8 @@ export default function ReceiptsPage() {
       category: '',
       minAmount: '',
       maxAmount: '',
-      search: ''
+      search: '',
+      clientId: ''
     })
   }
 
@@ -177,9 +185,9 @@ export default function ReceiptsPage() {
       )}
 
       <header className="bg-white shadow-sm border-b">
-        <div className="max-w-7xl mx-auto px-4 py-4 flex justify-between items-center">
+        <div className="max-w-7xl mx-auto px-4 py-4 flex flex-wrap justify-between items-center gap-3">
           <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-            🧾 Fişlerim
+            🧾 Müşteri Fişleri
           </h1>
           <div className="flex gap-3">
             <button
@@ -220,7 +228,7 @@ export default function ReceiptsPage() {
             🔍 Gelişmiş Filtreleme
           </h3>
           
-          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             <input
               type="date"
               value={filters.startDate}
@@ -235,6 +243,16 @@ export default function ReceiptsPage() {
               className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-gray-900"
               placeholder="Bitiş"
             />
+            <select
+              value={filters.clientId}
+              onChange={(e) => setFilters({...filters, clientId: e.target.value})}
+              className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-gray-900"
+            >
+              <option value="">Tüm Müşteriler</option>
+              {clients.map(client => (
+                <option key={client.id} value={client.id}>👤 {client.name}</option>
+              ))}
+            </select>
             <select
               value={filters.category}
               onChange={(e) => setFilters({...filters, category: e.target.value})}
@@ -267,11 +285,11 @@ export default function ReceiptsPage() {
               value={filters.search}
               onChange={(e) => setFilters({...filters, search: e.target.value})}
               className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-gray-900"
-              placeholder="🔍 Ara..."
+              placeholder="🔎 Ara..."
             />
           </div>
 
-          <div className="flex justify-between items-center mt-4">
+          <div className="flex flex-wrap justify-between items-center mt-4 gap-3">
             <div className="text-sm text-gray-600">
               {filteredReceipts.length} / {receipts.length} fiş gösteriliyor
             </div>
@@ -303,74 +321,145 @@ export default function ReceiptsPage() {
           </div>
         ) : (
           <div className="bg-white rounded-2xl shadow-lg overflow-hidden border border-gray-100">
-            <table className="w-full">
-              <thead className="bg-gradient-to-r from-blue-50 to-purple-50 border-b-2 border-blue-100">
-                <tr>
-                  <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">Tarih</th>
-                  <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">Firma</th>
-                  <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">Kategori</th>
-                  <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">Tutar</th>
-                  <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">KDV</th>
-                  <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">İşlem</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200">
-                {filteredReceipts.map((receipt) => (
-                  <tr 
-                    key={receipt.id} 
-                    className={`hover:bg-blue-50 transition ${
-                      anomalies.includes(receipt.id) ? 'bg-yellow-50' : ''
-                    }`}
-                  >
-                    <td className="px-6 py-4 text-sm text-gray-900">
-                      {receipt.date ? new Date(receipt.date).toLocaleDateString('tr-TR') : '-'}
-                    </td>
-                    <td className="px-6 py-4 text-sm font-medium text-gray-900">
-                      {receipt.company_name || '-'}
-                    </td>
-                    <td className="px-6 py-4 text-sm">
-                      <span className="px-3 py-1 bg-gradient-to-r from-blue-100 to-purple-100 text-blue-800 rounded-full text-xs font-medium border border-blue-200">
-                        {categoryIcons[receipt.category] || '📦'} {receipt.category || 'Diğer'}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 text-sm font-bold text-gray-900">
-                      {receipt.amount ? `${receipt.amount.toFixed(2)} ₺` : '-'}
-                      {anomalies.includes(receipt.id) && (
-                        <span className="ml-2 text-yellow-600" title="Normalden yüksek">⚠️</span>
+            {/* Mobile: Kart Görünümü */}
+            <div className="block md:hidden">
+              {filteredReceipts.map((receipt) => (
+                <div 
+                  key={receipt.id}
+                  className={`p-4 border-b ${anomalies.includes(receipt.id) ? 'bg-yellow-50' : ''}`}
+                >
+                  <div className="flex justify-between items-start mb-3">
+                    <div>
+                      <h3 className="font-bold text-gray-900 text-lg">
+                        {receipt.company_name || '-'}
+                      </h3>
+                      <p className="text-sm text-gray-600">
+                        {receipt.date ? new Date(receipt.date).toLocaleDateString('tr-TR') : '-'}
+                      </p>
+                      {receipt.clients && (
+                        <p className="text-xs text-blue-600 font-medium mt-1">
+                          👤 {receipt.clients.name}
+                        </p>
                       )}
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-600">
-                      {receipt.vat_amount ? `${receipt.vat_amount.toFixed(2)} ₺` : '-'}
-                    </td>
-                    <td className="px-6 py-4 text-sm">
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => setViewingImage(receipt.image_url)}
-                          className="px-3 py-1 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 font-medium transition"
-                        >
-                          👁️ Göster
-                        </button>
-                        <button
-                          onClick={() => handleDelete(receipt.id)}
-                          className="px-3 py-1 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 font-medium transition"
-                        >
-                           ✏️ Düzenle
-</button>
-<button
-  onClick={() => handleDelete(receipt.id)}
-  className="px-3 py-1 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 font-medium transition"
-  >                        
-  🗑️ Sil
-                        </button>
-                      </div>
-                    </td>
+                    </div>
+                    <span className="px-3 py-1 bg-gradient-to-r from-blue-100 to-purple-100 text-blue-800 rounded-full text-xs font-medium">
+                      {categoryIcons[receipt.category]} {receipt.category}
+                    </span>
+                  </div>
+                  
+                  <div className="flex justify-between items-center mb-3">
+                    <div>
+                      <p className="text-2xl font-bold text-gray-900">
+                        {receipt.amount ? `${receipt.amount.toFixed(2)} ₺` : '-'}
+                        {anomalies.includes(receipt.id) && (
+                          <span className="ml-2 text-yellow-600 text-base">⚠️</span>
+                        )}
+                      </p>
+                      <p className="text-sm text-gray-600">
+                        KDV: {receipt.vat_amount ? `${receipt.vat_amount.toFixed(2)} ₺` : '-'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2 flex-wrap">
+                    <button
+                      onClick={() => setViewingImage(receipt.image_url)}
+                      className="flex-1 px-3 py-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 font-medium text-sm"
+                    >
+                      👁️ Göster
+                    </button>
+                    <button
+                      onClick={() => router.push(`/receipts/edit/${receipt.id}`)}
+                      className="flex-1 px-3 py-2 bg-yellow-100 text-yellow-700 rounded-lg hover:bg-yellow-200 font-medium text-sm"
+                    >
+                      ✏️ Düzenle
+                    </button>
+                    <button
+                      onClick={() => handleDelete(receipt.id)}
+                      className="flex-1 px-3 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 font-medium text-sm"
+                    >
+                      🗑️ Sil
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Desktop: Tablo Görünümü */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gradient-to-r from-blue-50 to-purple-50 border-b-2 border-blue-100">
+                  <tr>
+                    <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase">Müşteri</th>
+                    <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase">Tarih</th>
+                    <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase">Firma</th>
+                    <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase">Kategori</th>
+                    <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase">Tutar</th>
+                    <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase">KDV</th>
+                    <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase">İşlem</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-gray-200">
+                  {filteredReceipts.map((receipt) => (
+                    <tr 
+                      key={receipt.id} 
+                      className={`hover:bg-blue-50 transition ${
+                        anomalies.includes(receipt.id) ? 'bg-yellow-50' : ''
+                      }`}
+                    >
+                      <td className="px-6 py-4 text-sm font-medium text-blue-600">
+                        {receipt.clients ? `👤 ${receipt.clients.name}` : '—'}
+                      </td>
+                      <td className="px-6 py-4 text-sm text-gray-900">
+                        {receipt.date ? new Date(receipt.date).toLocaleDateString('tr-TR') : '-'}
+                      </td>
+                      <td className="px-6 py-4 text-sm font-medium text-gray-900">
+                        {receipt.company_name || '-'}
+                      </td>
+                      <td className="px-6 py-4 text-sm">
+                        <span className="px-3 py-1 bg-gradient-to-r from-blue-100 to-purple-100 text-blue-800 rounded-full text-xs font-medium border border-blue-200">
+                          {categoryIcons[receipt.category] || '📦'} {receipt.category || 'Diğer'}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-sm font-bold text-gray-900">
+                        {receipt.amount ? `${receipt.amount.toFixed(2)} ₺` : '-'}
+                        {anomalies.includes(receipt.id) && (
+                          <span className="ml-2 text-yellow-600">⚠️</span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 text-sm text-gray-600">
+                        {receipt.vat_amount ? `${receipt.vat_amount.toFixed(2)} ₺` : '-'}
+                      </td>
+                      <td className="px-6 py-4 text-sm">
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => setViewingImage(receipt.image_url)}
+                            className="px-3 py-1 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 font-medium transition"
+                          >
+                            👁️
+                          </button>
+                          <button
+                            onClick={() => router.push(`/receipts/edit/${receipt.id}`)}
+                            className="px-3 py-1 bg-yellow-100 text-yellow-700 rounded-lg hover:bg-yellow-200 font-medium transition"
+                          >
+                            ✏️
+                          </button>
+                          <button
+                            onClick={() => handleDelete(receipt.id)}
+                            className="px-3 py-1 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 font-medium transition"
+                          >
+                            🗑️
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
 
             <div className="px-6 py-4 bg-gradient-to-r from-blue-50 to-purple-50 border-t-2 border-blue-100">
-              <div className="flex justify-between items-center">
+              <div className="flex flex-wrap justify-between items-center gap-3">
                 <p className="text-sm font-medium text-gray-700">
                   Toplam <strong className="text-blue-600">{filteredReceipts.length}</strong> fiş
                 </p>

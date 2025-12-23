@@ -118,8 +118,32 @@ export default function Dashboard() {
                 🧾
               </div>
               <div>
-                <p className="text-sm text-gray-600">Toplam Kayıtlı Fiş</p>
+                <p className="text-sm text-gray-600">Toplam Fiş</p>
                 <p className="text-2xl font-bold text-gray-900">{stats.totalReceipts}</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center text-2xl">
+                📉
+              </div>
+              <div>
+                <p className="text-sm text-gray-600">Toplam Gider</p>
+                <p className="text-2xl font-bold text-red-600">{stats.totalExpense.toFixed(2)} ₺</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center text-2xl">
+                📈
+              </div>
+              <div>
+                <p className="text-sm text-gray-600">Toplam Gelir</p>
+                <p className="text-2xl font-bold text-green-600">{stats.totalIncome.toFixed(2)} ₺</p>
               </div>
             </div>
           </div>
@@ -130,7 +154,7 @@ export default function Dashboard() {
                 👥
               </div>
               <div>
-                <p className="text-sm text-gray-600">Müşterileriniz</p>
+                <p className="text-sm text-gray-600">Müşteriler</p>
                 <p className="text-2xl font-bold text-gray-900">{stats.totalClients}</p>
               </div>
             </div>
@@ -178,7 +202,7 @@ export default function Dashboard() {
             <div className="text-5xl mb-4">🧾</div>
             <h3 className="text-2xl font-bold text-gray-900 mb-2">Müşteri Fişleri</h3>
             <p className="text-gray-600">
-              Müşterilerinizin fişlerini görüntüleyin ve yönetin
+              Tüm fişleri müşterilere göre görüntüleyin
             </p>
           </button>
 
@@ -189,13 +213,51 @@ export default function Dashboard() {
             <div className="text-5xl mb-4">👥</div>
             <h3 className="text-2xl font-bold text-gray-900 mb-2">Müşteriler</h3>
             <p className="text-gray-600">
-              Müşteri listesini yönetin
+              Müşteri listesini yönetin ve fişlerini görün
             </p>
             {stats.totalClients > 0 && (
               <span className="inline-block mt-2 px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm font-medium">
                 {stats.totalClients} müşteri
               </span>
             )}
+          </button>
+
+          <button
+            onClick={() => router.push('/budgets')}
+            className="bg-white rounded-2xl shadow-lg p-8 hover:shadow-xl transition text-left border border-gray-100"
+          >
+            <div className="text-5xl mb-4">💰</div>
+            <h3 className="text-2xl font-bold text-gray-900 mb-2">Bütçe Yönetimi</h3>
+            <p className="text-gray-600">
+              Kategori bazlı bütçe limitleri belirleyin
+            </p>
+            {stats.budgetAlerts > 0 && (
+              <span className="inline-block mt-2 px-3 py-1 bg-yellow-100 text-yellow-700 rounded-full text-sm font-medium">
+                ⚠️ {stats.budgetAlerts} uyarı
+              </span>
+            )}
+          </button>
+
+          <button
+            onClick={() => router.push('/analytics')}
+            className="bg-white rounded-2xl shadow-lg p-8 hover:shadow-xl transition text-left border border-gray-100"
+          >
+            <div className="text-5xl mb-4">📊</div>
+            <h3 className="text-2xl font-bold text-gray-900 mb-2">Analiz & Raporlar</h3>
+            <p className="text-gray-600">
+              Detaylı harcama analizleri ve karşılaştırmalar
+            </p>
+          </button>
+
+          <button
+            onClick={() => alert('Yakında!')}
+            className="bg-gray-50 rounded-2xl shadow-lg p-8 hover:shadow-xl transition text-left border-2 border-dashed border-gray-300"
+          >
+            <div className="text-5xl mb-4">📄</div>
+            <h3 className="text-2xl font-bold text-gray-900 mb-2">PDF Yükle</h3>
+            <p className="text-gray-600">
+              Toplu PDF fatura yükleme (Yakında)
+            </p>
           </button>
         </div>
 
