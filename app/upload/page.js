@@ -42,30 +42,8 @@ export default function UploadPage() {
     setPreviews(previewUrls)
   }
 
-  // GERÇEK CONFIDENCE HESAPLAMA
-  const calculateConfidence = (text, pattern, extractedValue) => {
-    if (!extractedValue) return 0
-    
-    // Regex ile eşleşme varsa yüksek confidence
-    const match = text.match(pattern)
-    if (match) {
-      // Eşleşme kalitesine göre 70-95 arası
-      const matchQuality = match[0].length / extractedValue.length
-      return Math.min(95, Math.max(70, Math.round(matchQuality * 100)))
-    }
-    
-    return 60 // Zayıf eşleşme
-  }
-
-  const extractReceiptData = (text, tesseractData) => {
-    // Tesseract'tan gelen kelime bazlı confidence'lar
-    const wordConfidences = {}
-    if (tesseractData && tesseractData.words) {
-      tesseractData.words.forEach(word => {
-        wordConfidences[word.text.toLowerCase()] = word.confidence
-      })
-    }
-
+  const extractReceiptData = (text) => {
+    // Regex patterns for Turkish receipts
     const patterns = {
       date: /(\d{2}[\.\/\-]\d{2}[\.\/\-]\d{4})|(\d{4}[\.\/\-]\d{2}[\.\/\-]\d{2})/,
       amount: /(?:TOPLAM|TOTAL|TUTAR)[\s:]*\*?\s*([\d,\.]+)/i,
@@ -86,60 +64,41 @@ export default function UploadPage() {
       }
     }
 
-    // Tarih extraction + confidence
+    // Extract date
     const dateMatch = text.match(patterns.date)
     if (dateMatch) {
       let dateStr = dateMatch[0].replace(/\./g, '-').replace(/\//g, '-')
+      // Convert to YYYY-MM-DD format
       const parts = dateStr.split('-')
       if (parts.length === 3) {
         if (parts[0].length === 4) {
-          result.date = dateStr
+          result.date = dateStr // Already YYYY-MM-DD
         } else {
-          result.date = `${parts[2]}-${parts[1]}-${parts[0]}`
+          result.date = `${parts[2]}-${parts[1]}-${parts[0]}` // DD-MM-YYYY to YYYY-MM-DD
         }
-        
-        // Confidence hesapla
-        const avgWordConf = parts.reduce((sum, part) => {
-          return sum + (wordConfidences[part] || 70)
-        }, 0) / parts.length
-        
-        result.confidence.date = Math.round(avgWordConf)
+        result.confidence.date = 85
       }
     }
 
-    // Tutar extraction + confidence
+    // Extract amount
     const amountMatch = text.match(patterns.amount)
     if (amountMatch) {
       result.amount = amountMatch[1].replace(',', '.')
-      
-      // "TOPLAM" kelimesinin confidence'ı + sayının confidence'ı
-      const toplamConf = wordConfidences['toplam'] || wordConfidences['total'] || 75
-      const numberConf = wordConfidences[amountMatch[1].replace(/[,\.]/g, '')] || 80
-      result.confidence.amount = Math.round((toplamConf + numberConf) / 2)
+      result.confidence.amount = 85
     }
 
-    // KDV extraction + confidence
+    // Extract VAT amount
     const vatMatch = text.match(patterns.vatAmount)
     if (vatMatch) {
       result.vatAmount = vatMatch[1].replace(',', '.')
-      
-      const kdvConf = wordConfidences['kdv'] || wordConfidences['topkdv'] || 70
-      const numberConf = wordConfidences[vatMatch[1].replace(/[,\.]/g, '')] || 75
-      result.confidence.vatAmount = Math.round((kdvConf + numberConf) / 2)
+      result.confidence.vatAmount = 80
     }
 
-    // Firma adı extraction + confidence
+    // Extract company name
     const companyMatch = text.match(patterns.companyName)
     if (companyMatch) {
       result.companyName = companyMatch[1].trim()
-      
-      // İlk satır genelde daha net okunur
-      const firstLineWords = result.companyName.split(' ')
-      const avgConf = firstLineWords.reduce((sum, word) => {
-        return sum + (wordConfidences[word.toLowerCase()] || 70)
-      }, 0) / firstLineWords.length
-      
-      result.confidence.companyName = Math.round(avgConf)
+      result.confidence.companyName = 75
     }
 
     return result
@@ -173,9 +132,9 @@ export default function UploadPage() {
           .from('receipts')
           .getPublicUrl(fileName)
 
-        // 2. Tesseract OCR (kelime bazlı confidence ile)
+        // 2. Tesseract OCR
         console.log(`Processing file ${i + 1}/${selectedFiles.length}...`)
-        const { data: tesseractResult } = await Tesseract.recognize(file, 'tur', {
+        const { data: { text } } = await Tesseract.recognize(file, 'tur', {
           logger: m => {
             if (m.status === 'recognizing text') {
               console.log(`OCR Progress: ${Math.round(m.progress * 100)}%`)
@@ -183,16 +142,10 @@ export default function UploadPage() {
           }
         })
 
-        const text = tesseractResult.text
         console.log('OCR Text:', text)
-        console.log('Tesseract Confidence:', tesseractResult.confidence) // Genel confidence
-        console.log('Word Confidences:', tesseractResult.words.map(w => ({
-          text: w.text,
-          confidence: w.confidence
-        })))
 
-        // 3. Gerçek confidence ile extract et
-        const extracted = extractReceiptData(text, tesseractResult)
+        // 3. Extract data from OCR text
+        const extracted = extractReceiptData(text)
 
         // 4. Claude API ile iyileştir
         let claudeData = null
@@ -209,9 +162,10 @@ export default function UploadPage() {
           }
         } catch (apiError) {
           console.error('Claude API error:', apiError)
+          // Fallback to regex extraction
         }
 
-        // Claude'dan gelen confidence'ları kullan (varsa), yoksa Tesseract'ınkini kullan
+        // Merge Claude data with regex extraction (Claude takes priority)
         const finalData = {
           imageUrl: publicUrl,
           date: claudeData?.date || extracted.date,
@@ -222,15 +176,9 @@ export default function UploadPage() {
             ((parseFloat(extracted.vatAmount) / (parseFloat(extracted.amount) - parseFloat(extracted.vatAmount))) * 100).toFixed(1) : ''),
           category: claudeData?.category || 'Diğer',
           rawText: text,
-          confidence: {
-            date: claudeData?.confidence?.date || extracted.confidence.date,
-            amount: claudeData?.confidence?.amount || extracted.confidence.amount,
-            vatAmount: claudeData?.confidence?.vatAmount || extracted.confidence.vatAmount,
-            companyName: claudeData?.confidence?.companyName || extracted.confidence.companyName
-          }
+          confidence: claudeData?.confidence || extracted.confidence
         }
 
-        console.log('Final Confidence Scores:', finalData.confidence)
         results.push(finalData)
 
       } catch (error) {
@@ -242,12 +190,12 @@ export default function UploadPage() {
           amount: '',
           companyName: '',
           category: 'Diğer',
-          rawText: '',
-          confidence: { date: 0, amount: 0, vatAmount: 0, companyName: 0 }
+          rawText: ''
         })
       }
     }
 
+    // Save to localStorage with client info
     localStorage.setItem('bulk_results', JSON.stringify(results.map(r => ({
       ...r,
       client_id: selectedClient,
@@ -391,7 +339,7 @@ export default function UploadPage() {
                 />
               </div>
               <p className="text-sm text-gray-600 text-center mt-2">
-                OCR ve AI analizi yapılıyor... Console'da detayları görebilirsiniz.
+                OCR ve AI analizi yapılıyor...
               </p>
             </div>
           )}
@@ -399,12 +347,12 @@ export default function UploadPage() {
 
         {/* Bilgi Kartı */}
         <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-6 mt-6">
-          <h4 className="font-bold text-blue-900 mb-3">🎯 Gerçek Confidence Sistemi</h4>
+          <h4 className="font-bold text-blue-900 mb-3">🤖 Nasıl Çalışır?</h4>
           <ul className="space-y-2 text-sm text-blue-800">
-            <li>✅ <strong>Tesseract OCR:</strong> Her kelime için gerçek güven skoru</li>
-            <li>✅ <strong>Akıllı Hesaplama:</strong> Kelime bazlı ortalamaları kullanır</li>
-            <li>✅ <strong>Console Log:</strong> F12 açıp tüm detayları görebilirsiniz</li>
-            <li>✅ <strong>Claude AI:</strong> Confidence skorlarını iyileştirir</li>
+            <li>✅ <strong>Tesseract OCR:</strong> Fişten yazıları çıkarır</li>
+            <li>✅ <strong>Claude AI:</strong> Bilgileri düzenler ve kategorize eder</li>
+            <li>✅ <strong>Otomatik:</strong> Tarih, tutar, KDV otomatik bulunur</li>
+            <li>✅ <strong>Kontrol:</strong> Sonraki adımda tüm bilgileri kontrol edebilirsiniz</li>
           </ul>
         </div>
       </main>
